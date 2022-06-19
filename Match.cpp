@@ -1,13 +1,9 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/optional.hpp>
-#include <boost/unordered_set.hpp>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <regex>
 #include <stack>
-#include <string>
-#include <functional>
 
 struct Glob
 {
