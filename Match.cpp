@@ -11,46 +11,28 @@ struct Glob
     {
         // normalise slashes
         static const std::regex slashSplit{ "/+" };
-        this->pattern =
-            std::regex_replace(boost::trim_copy(pattern), slashSplit, "/");
+        this->pattern = std::regex_replace(boost::trim_copy(pattern), slashSplit, "/");
 
-        this->Make();
-    }
+        ParseNegate();
 
-    void Make()
-    {
-        this->ParseNegate();
+        // Bash 4.3 preserves the first two bytes that start with {}
+        if (this->pattern.substr(0, 2) == "{}") this->pattern = "\\{\\}" + this->pattern.substr(2);
+        globSet = BraceExpand(this->pattern);
 
-        this->globSet = BraceExpand(
-            // Bash 4.3 preserves the first two bytes that start with {}
-            pattern.substr(0, 2) == "{}" ?
-            "\\{\\}" + pattern.substr(2) :
-            pattern
-        );
-
-        std::for_each(globSet.begin(), globSet.end(), [&](std::string p)
+        for (std::string& p : globSet)
         {
             std::vector<std::string> parts;
             boost::split(parts, p, boost::is_any_of("/"));
             globParts.push_back(parts);
-        });
+        }
 
-        for (auto it = globParts.begin(); it != globParts.end(); it++)
+        for (std::vector<std::string>& globPart : globParts)
         {
-            std::vector<std::string> globPart = *it;
             std::vector<ParseItem*> buffer;
-
-            for (auto it2 = globPart.begin(); it2 != globPart.end(); it2++)
-            {
-                std::string part = *it2;
+            for (std::string& part : globPart)
                 if (auto parsed = Parse(part, false))
-                {
-                    auto result = std::get<0>(*parsed);
-                    buffer.push_back(result);
-                }
-                else
-                    goto failure;
-            }
+                    buffer.push_back(parsed->first);
+                else goto failure;
 
             set.push_back(buffer);
             continue;
@@ -62,14 +44,11 @@ struct Glob
 
     void ParseNegate()
     {
-        int negateOffset = 0;
-        for (int i = 0; i < this->pattern.length() && this->pattern[i] == '!';
-            i++)
-        {
-            negate = !negate;
-            negateOffset++;
-        }
-        if (negateOffset > 0) this->pattern = this->pattern.substr(negateOffset);
+        auto it = pattern.begin();
+        auto end = pattern.end();
+        for (; it != end && *it == '!'; ++it);
+        negate = std::distance(pattern.begin(), it) & 1;
+        pattern = std::string(it, end);
     }
 
     // https://www.gnu.org/software/bash/manual/html_node/Brace-Expansion.html
@@ -78,7 +57,6 @@ struct Glob
         auto begin = pattern.begin();
         auto it = pattern.begin();
         auto end = pattern.end();
-        bool escaping = false;
 
         if (pattern[0] != '{')
         {
@@ -95,19 +73,14 @@ struct Glob
                         }
                         continue;
                     case('\\'):
-                        ++it;
-                        if (it == end) break;
+                        if (++it == end) break;
                         continue;
                     case('{'):
                     {
                         std::string prefix(begin, it);
                         std::string postfix(it, end);
                         std::vector<std::string> e = BraceExpand(postfix);
-                        std::transform(e.begin(), e.end(), e.begin(), [&](std::string s)
-                        {
-                            return prefix + s;
-                        });
-
+                        for (auto& s : e) s = prefix + s;
                         return e;
                     }
                     default:
@@ -133,6 +106,7 @@ struct Glob
             int inc = seq[3].matched == false ? 1 : std::abs(std::stoi(seq[3].str())),
                 start,
                 end;
+
             if (isNumeric)
             {
                 size_t $1_size;
@@ -144,8 +118,8 @@ struct Glob
             }
             else start = $1[0], end = $2[0];
             if (start > end) std::swap(start, end);
-            std::vector<std::string> ret;
 
+            std::vector<std::string> ret;
             for (; start <= end; start += inc)
             {
                 std::ostringstream o;
@@ -160,54 +134,39 @@ struct Glob
 
         int depth = 1;
         std::vector<std::string> set;
-        std::string member = "";
+        auto member = pattern.begin();
 
-        for (++it; it != end && depth; ++it)
+        for (++member, ++it; it != end && depth; ++it)
         {
             switch (*it)
             {
                 case ('\\'):
-                    if (it + 1 == end) break;
-                    member += *it;
-                    member += *++it;
+                    if (++it == end) break;
                     continue;
-
                 case ('{'):
                     depth++;
-                    member += *it;
                     continue;
-
                 case ('}'):
-                    depth--;
-                    if (depth == 0)
+                    if (--depth == 0)
                     {
-                        set.push_back(member);
-                        member = "";
+                        set.push_back(std::string(member, it));
+                        std::advance(member, std::distance(member, it) + 1);
                     }
-                    else
-                        member += *it;
                     continue;
-
                 case (','):
                     if (depth == 1)
                     {
-                        set.push_back(member);
-                        member = "";
+                        set.push_back(std::string(member, it));
+                        std::advance(member, std::distance(member, it) + 1);
                     }
-                    else
-                        member += *it;
                     continue;
-
-                default:
-                    member += *it;
-                    continue;
+                default: continue;
             }
 
             break;
         }
 
-        if (depth != 0)
-            return BraceExpand("\\" + pattern);
+        if (depth != 0) return BraceExpand("\\" + pattern);
 
         std::vector<std::string> nestedSet;
         for (auto& s : set)
@@ -220,10 +179,7 @@ struct Glob
             static const std::regex hasOptions(R"(,.*\})");
             if (std::regex_search(post, hasOptions))
                 return BraceExpand(std::string(begin, it - 1) + "\\}" + post);
-            std::transform(nestedSet.begin(), nestedSet.end(), nestedSet.begin(), [](std::string s)
-            {
-                return "{" + s + "}";
-            });
+            for (auto& s : nestedSet) s = "{" + s + "}";
         }
 
         // add suffixes
@@ -278,11 +234,10 @@ struct Glob
         size_t reEnd;
     };
 
-    boost::optional<std::tuple<Glob::ParseItem*, bool>> Parse(
-        std::string& pattern, bool isSub)
+    boost::optional<std::pair<Glob::ParseItem*, bool>> Parse(std::string& pattern, bool isSub)
     {
         if (pattern.empty() || pattern == "**")
-            return std::tuple<ParseItem*, bool>{new LiteralItem{ pattern }, false};
+            return std::pair<ParseItem*, bool>{new LiteralItem{ pattern }, false};
 
         static const std::string qmark = "[^/]";
         static const std::string star = qmark + "*?";
@@ -300,10 +255,10 @@ struct Glob
 
         auto clearStateChar = [&]()
         {
-            if (!stateChar) return;
-
             switch (stateChar)
             {
+                case 0:
+                    return;
                 case '*':
                     re += star;
                     hasMagic = true;
@@ -328,7 +283,7 @@ struct Glob
             if (escaping)
             {
                 if (c == '/')
-                    return boost::optional<std::tuple<ParseItem*, bool>>{};
+                    return boost::optional<std::pair<ParseItem*, bool>>{};
                 if (reSpecials.find(c) != std::string::npos)
                     re += "\\";
                 re += c;
@@ -339,7 +294,7 @@ struct Glob
             switch (c)
             {
                 case '/':
-                    return boost::optional<std::tuple<ParseItem*, bool>>{};
+                    return boost::optional<std::pair<ParseItem*, bool>>{};
 
                 case '\\':
                     clearStateChar();
@@ -454,9 +409,9 @@ struct Glob
                     }
                     catch (const std::regex_error&)
                     {
-                        std::tuple<Glob::ParseItem*, bool> sp = *Parse(cs, true);
-                        re = re.substr(0, reClassStart) + "\\[" + (*std::get<0>(sp)).source() + "\\]";
-                        hasMagic = hasMagic || std::get<1>(sp);
+                        std::pair<Glob::ParseItem*, bool> sp = *Parse(cs, true);
+                        re = re.substr(0, reClassStart) + "\\[" + (*sp.first).source() + "\\]";
+                        hasMagic = hasMagic || sp.second;
                         inClass = false;
                         continue;
                     }
@@ -481,9 +436,9 @@ struct Glob
         if (inClass)
         {
             std::string cs = pattern.substr(classStart + 1);
-            std::tuple<Glob::ParseItem*, bool> sp = *Parse(cs, true);
-            re = re.substr(0, reClassStart) + "\\[" + (*std::get<0>(sp)).source();
-            hasMagic = hasMagic || std::get<1>(sp);
+            std::pair<Glob::ParseItem*, bool> sp = *Parse(cs, true);
+            re = re.substr(0, reClassStart) + "\\[" + (*sp.first).source();
+            hasMagic = hasMagic || sp.second;
         }
 
         for (size_t p = patternListStack.size(); p-- > 0;)
@@ -493,15 +448,16 @@ struct Glob
 
             std::string tail;
             std::string tailStr = re.substr(pl.reStart + 3);
-            auto lastMatch = 0;
+            ptrdiff_t lastMatch = 0;
             auto lastMatchEnd = tailStr.cbegin();
             static const std::regex escapeCheck(R"(((?:\\{2}){0,64})(\\?)\|)");
             std::sregex_iterator begin(tailStr.cbegin(), tailStr.cend(), escapeCheck),
                 end;
 
-            std::for_each(begin, end, [&](const std::smatch& match)
+            for (; begin != end; ++begin)
             {
-                auto pos = match.position(0);
+                const std::smatch& match = *begin;
+                auto pos = match.position();
                 auto start = lastMatchEnd;
                 std::advance(start, pos - lastMatch);
                 tail.append(lastMatchEnd, start);
@@ -511,11 +467,11 @@ struct Glob
                 if ($2.empty()) $2 = "\\";
                 tail.append($1 + $1 + $2 + "|");
 
-                auto length = match.length(0);
+                auto length = match.length();
                 lastMatch = pos + length;
                 lastMatchEnd = start;
                 std::advance(lastMatchEnd, length);
-            });
+            }
 
             tail.append(lastMatchEnd, tailStr.cend());
 
@@ -562,15 +518,15 @@ struct Glob
         if (addPatternStart) re = patternStart + re;
 
         if (isSub)
-            return std::tuple<ParseItem*, bool>{new LiteralItem{ re }, hasMagic};
+            return std::pair<ParseItem*, bool>{new LiteralItem{ re }, hasMagic};
 
         if (!hasMagic)
         {
             static const std::regex globUnescape(R"(\\(.))");
-            return std::tuple<ParseItem*, bool>{new LiteralItem{ std::regex_replace(re, globUnescape, "$1") }, false};
+            return std::pair<ParseItem*, bool>{new LiteralItem{ std::regex_replace(re, globUnescape, "$1") }, false};
         }
 
-        return std::tuple<ParseItem*, bool>{new MagicItem{ re }, false};
+        return std::pair<ParseItem*, bool>{new MagicItem{ re }, false};
     }
 
     bool Matches(const std::string& file)
@@ -613,8 +569,8 @@ struct Glob
 
                 while (fr < fl)
                 {
-                    auto frSlice = std::vector<std::string>(file.begin() + fr, file.end());
-                    auto prSlice = std::vector<ParseItem*>(pattern.begin() + pr, pattern.end());
+                    std::vector<std::string> frSlice(file.begin() + fr, file.end());
+                    std::vector<ParseItem*> prSlice(pattern.begin() + pr, pattern.end());
                     if (MatchOne(frSlice, prSlice, partial))
                         return true;
                     if (file[fr][0] == '.')

@@ -175,6 +175,7 @@ namespace Match
             MATCH("a{b{c{d,e}f{x,y{}g}h", Of("a{b{cdfxh", "a{b{cdfy{}gh", "a{b{cefxh", "a{b{cefy{}gh"));
             MATCH("{a,b}${c}${d}", Of("a${c}${d}", "b${c}${d}"));
             MATCH("${a}${b}{c,d}", Of("${a}${b}c", "${a}${b}d"));
+            EXPAND("x{{a,b}}y", Of("x{a}y", "x{b}y"));
         }
     };
 
