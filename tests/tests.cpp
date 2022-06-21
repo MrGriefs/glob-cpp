@@ -39,6 +39,11 @@ inline boost::optional<std::string> Expands(std::string exp, std::vector<std::st
 #define EXPAND(exp, expected)           \
     if (auto r = Expands(exp, expected)) Assert::Fail(LONG((std::string)r->c_str()))
 
+#define ISGLOB(glob, expected)              \
+    if (Glob(glob).IsGlob() != expected)    \
+        expected ? Assert::Fail(LONG("\""glob"\".IsGlob != true"))   \
+                 : Assert::Fail(LONG("\""glob"\".IsGlob != false"))
+
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
 namespace Match
@@ -176,6 +181,13 @@ namespace Match
             MATCH("{a,b}${c}${d}", Of("a${c}${d}", "b${c}${d}"));
             MATCH("${a}${b}{c,d}", Of("${a}${b}c", "${a}${b}d"));
             EXPAND("x{{a,b}}y", Of("x{a}y", "x{b}y"));
+        }
+
+        TEST_METHOD(is_glob)
+        {
+            ISGLOB("a/b/c", false);
+            ISGLOB("dir/src/abc.js", false);
+            ISGLOB("dir/src/abc.*", true);
         }
     };
 

@@ -125,8 +125,7 @@ struct Glob
                 std::ostringstream o;
                 if (isNumeric) o << std::setfill('0') << std::setw(pad) << start;
                 else o << (char)start;
-                for (int i = 0; i < suf.size(); i++)
-                    ret.push_back(o.str() + suf[i]);
+                for (auto& s : suf) ret.push_back(o.str() + s);
             }
 
             return ret;
@@ -184,10 +183,9 @@ struct Glob
 
         // add suffixes
         std::vector<std::string> result;
-        std::vector<std::string> r = BraceExpand(post);
-        for (auto postIt = r.begin(); postIt != r.end(); ++postIt)
-            for (auto setIt = nestedSet.begin(); setIt != nestedSet.end(); ++setIt)
-                result.push_back(*setIt + *postIt);
+        for (auto& postfix : BraceExpand(post))
+            for (auto& suffix : nestedSet)
+                result.push_back(suffix + postfix);
 
         return result;
     }
@@ -595,6 +593,16 @@ struct Glob
             return fi == file.size() - 1 && file[fi] == "";
 
         throw std::runtime_error("Glob matching passthrough.");
+    }
+
+    bool IsGlob()
+    {
+        if (set.size() != 1 || globParts.size() != 1 || set[0].size() != globParts[0].size())
+            return true;
+        for (auto& item : set[0])
+            if (dynamic_cast<MagicItem*>(item))
+                return true;
+        return false;
     }
 
 private:
